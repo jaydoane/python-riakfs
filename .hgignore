@@ -1,0 +1,27 @@
+
+syntax: glob
+
+*.pyc
+*.~
+*.swp
+*.swo
+*.orb
+*.tmp
+local_settings.py
+data/dist
+data/cache
+*/media/*
+*/build/*
+*/dist/*
+*egg-info/*
+bin
+eggs
+develop-eggs
+develop-src
+parts
+.installed.cfg
+content
+site
+*.git
+*.hg
+
