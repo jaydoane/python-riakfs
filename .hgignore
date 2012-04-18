@@ -24,4 +24,5 @@ content
 site
 *.git
 *.hg
+riak-*
 
