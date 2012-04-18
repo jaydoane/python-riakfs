@@ -235,13 +235,14 @@ class RiakFS(MemoryFS):
     @synchronize
     def _on_close_memory_file(self, open_file, path):
         dir_entry = self._get_dir_entry(path)
-        data = open_file.mem_file.getvalue()
-        #print data
-        if data:
-            entity = self.bucket.new_binary(dir_entry.path, data)
-            entity.store()
         if dir_entry is not None:
+            data = open_file.mem_file.getvalue()
+            if data:
+                entity = self.bucket.new_binary(dir_entry.path, data)
+                entity.store()
             dir_entry.open_files.remove(open_file)        
+            del dir_entry._mem_file
+            dir_entry._mem_file = None
                 
     @synchronize
     def makedir(self, dirname, recursive=False, allow_recreate=False):
