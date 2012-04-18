@@ -21,19 +21,13 @@ TRANSPORTS = {
 }
 
 def RiakBucket(name, host, port, transport):
+    """
+    Utility for creating a `riak.RiakBucket` instance from string parameters.
+    """
     client = riak.RiakClient(
         host=host, port=port, transport_class=TRANSPORTS[transport]
     )
     return client.bucket(name)
-
-#class RiakFSMemoryFile(MemoryFile):
-#
-#    def __init__(self, path, memory_fs, mem_file, mode, lock):
-#        bytes = memory_fs.bucket.get_binary(path).get_data()
-#        mem_file = StringIO(bytes)
-#        super(RiakFSMemoryFile, self).__init__(
-#            path, memory_fs, mem_file, mode, lock
-#        )
 
 class RiakFSObject(DirEntry):
 
