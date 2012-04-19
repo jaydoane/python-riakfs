@@ -39,8 +39,8 @@ class RiakFSObject(DirEntry):
             prefix = d.pop('prefix', None)
             contents = d.pop('contents', {})
             obj = cls(bucket, type, name, prefix)
-            obj['xattrs'] = d['xattrs']
-            obj['timestamps'] = d['timestamps']
+            obj.xattrs = d['xattrs']
+            obj.timestamps = d['timestamps']
             for k, v in contents.items():
                 obj.contents[k] = obj_from_dict(v)
             return obj
@@ -175,12 +175,13 @@ class RiakFS(MemoryFS):
         obj = self.bucket.get(self.ROOTKEY)
         data = obj.get_data()
         if data:
-            return RiakFSObject.from_dict(data)
+            return RiakFSObject.from_dict(self.bucket, data)
         else:
             return RiakFSObject(self.bucket, 'dir', self.ROOTKEY)
 
     def set_journal(self):
-        return self.bucket.new(self.ROOTKEY, self.root.to_dict())
+        obj = self.bucket.new(self.ROOTKEY, self.root.to_dict())
+        obj.store()
 
     def __init__(self, bucket, host='127.0.0.1', port=8091, transport="HTTP"):
         super(MemoryFS, self).__init__(thread_synchronize=_thread_synchronize_default)

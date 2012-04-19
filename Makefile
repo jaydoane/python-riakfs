@@ -23,3 +23,6 @@ riak.devstart: riak.devinstall
 	@./$(RIAKVERSION)/dev/dev2/bin/riak-admin join dev1@127.0.0.1
 	@./$(RIAKVERSION)/dev/dev3/bin/riak-admin join dev1@127.0.0.1
 
+test:
+	py.test .
+
