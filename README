@@ -1,5 +1,59 @@
 
-========================================
-riakfs - riak-backed vvritual filesystem
-========================================
+=======================================
+riakfs - riak-backed virtual filesystem
+=======================================
+
+A `pyfilesystem`_ subclass that uses `Riak`_ for distributed storage.
+
+The idea is to abuse the ``MemoryFS`` class to get a tree-of-objects
+representation of a filesystem, but where file objects are stored
+transparently in a `Riak`_ cluster. The tree-of-objects is itself
+serializable to json and, after a call to the filesystem's ``close()``
+method, is stored as the filesystem "journal".
+
+
+Quickstart
+----------
+
+Virtualenv and pip is recommended, I had problems installing `protobuf` with
+easy_install.
+
+In a virtualenv, install the following::
+
+    pip install fs
+    pip install protobuf
+    pip install riak
+
+There is no **riakfs** release yet, so install the development version::
+
+    pip install -e git+ssh://git@github.com/podados/python-riakfs.git#egg=riakfs
+
+Move to the riakfs source directory and, assuming that you don't have a Riak
+cluster installed, run the ``riak.devstart`` make target::
+
+    make riak.devstart
+
+This will download and install Riak and create and start a three node
+development cluster. The installation assumes that you have Erlang installed -
+the `Basho Wiki`_ has details (a source install on Ubuntu was
+straightforward).
+
+Run the riakfs tests with::
+
+    make test
+
+which assumes `pytest`_ is installed and that a Riak server is running
+on port 8091.
+
+Usage
+-----
+
+::
+
+    >>> from riakfs import RiakFS
+    >>> fs = RiakFS('test-bucket')
+
+
+
+.. _Basho Wiki: http://wiki.basho.com/Installing-Erlang.html
 
