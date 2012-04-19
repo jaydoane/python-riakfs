@@ -11,6 +11,7 @@ from fs.filelike import StringIO
 from fs.errors import (
     ResourceNotFoundError, ResourceInvalidError, PathError,
     DestinationExistsError, ParentDirectoryMissingError,
+    DirectoryNotEmptyError,
 )
 
 import riak
@@ -28,6 +29,24 @@ def RiakBucket(name, host, port, transport):
         host=host, port=port, transport_class=TRANSPORTS[transport]
     )
     return client.bucket(name)
+
+class DirtyFlag(object):
+
+    def __init__(self):
+        self.isdirty = False
+
+    def __get__(self, instance, owner):
+        if instance.autoupdate:
+            return False
+        else:
+            return self.isdirty
+
+    def __set__(self, instance, value):
+        if instance.autoupdate:
+            if value:
+                instance.save()
+        else:
+            self.isdirty = value
 
 class RiakFSObject(DirEntry):
 
@@ -47,10 +66,11 @@ class RiakFSObject(DirEntry):
         return obj_from_dict(data)
 
     def to_dict(self):
+        ignore = set(['bucket', 'contents', 'lock', 'open_files',])
         def serialize(obj):
             d = {}
             for k,v in obj.__dict__.iteritems():
-                if k == 'bucket' or k == 'contents' or k == 'lock' or k.startswith('_'):
+                if k in ignore or k.startswith('_'):
                     continue
                 d[k] = v
             if obj.contents:
@@ -113,18 +133,38 @@ class RiakFSObject(DirEntry):
         
         self.xattrs = {}
         
-        self.key = None
+        #self.key = None
         self.lock = None
         self._mem_file = None
         if self.type == 'file':
             self.lock = threading.RLock()
             
     def _make_dir_entry(self, type, name, contents=None):
+        if contents:
+            def update_paths(entries, prefix):
+                prefix = '/' + prefix.strip('/') + '/'
+                for entry in entries:
+                    entry.prefix = prefix
+                    entry.path = prefix + entry.name
+                    if entry.contents:
+                        update_paths(entry.contents.values(), entry.path)
+            update_paths(contents.values(), self.path)
         child = self.__class__(
             self.bucket, type, name, prefix=self.path, contents=contents
         )
         self.contents[name] = child
         return child
+
+    def remove(self, name):
+        entry = self.contents[name]
+        if entry.isfile():
+            key = self.path + name
+            obj = self.bucket.get(key)
+            obj.delete()
+        else:
+           for child in entry.contents.keys():
+               entry.remove(child)
+        del self.contents[name]
 
     def __getstate__(self):
         state = self.__dict__.copy()        
@@ -166,31 +206,36 @@ class RiakFS(MemoryFS):
              'case_insensitive_paths' : False,
              'atomic.move' : False,
              'atomic.copy' : False,
-             'atomic.makedir' : True,
-             'atomic.rename' : True,
+             'atomic.makedir' : False,
+             'atomic.rename' : False,
              'atomic.setcontents' : False,              
               }
 
-    def get_journal(self):
+    def load(self):
         obj = self.bucket.get(self.ROOTKEY)
         data = obj.get_data()
         if data:
-            return RiakFSObject.from_dict(self.bucket, data)
+            self.root = RiakFSObject.from_dict(self.bucket, data)
         else:
-            return RiakFSObject(self.bucket, 'dir', self.ROOTKEY)
+            self.root = RiakFSObject(self.bucket, 'dir', self.ROOTKEY)
 
-    def set_journal(self):
+    def save(self):
         obj = self.bucket.new(self.ROOTKEY, self.root.to_dict())
         obj.store()
 
-    def __init__(self, bucket, host='127.0.0.1', port=8091, transport="HTTP"):
+    def __init__(
+            self, bucket, host='127.0.0.1', port=8091,
+            transport="HTTP", autoupdate=True
+        ):
         super(MemoryFS, self).__init__(thread_synchronize=_thread_synchronize_default)
         self.host = host
         self.port = port
         self.transport = transport.upper()
         self._bucket = bucket
         self.file_factory = MemoryFile
-        self.root = self.get_journal()
+        self.root = None
+        self.autoupdate = autoupdate
+        self.dirty = DirtyFlag()
 
     def _get_bucket(self):
         if isinstance(self._bucket, basestring):
@@ -218,7 +263,7 @@ class RiakFS(MemoryFS):
         return state
 
     def close(self):
-        self.set_journal()
+        self.save()
 
     @synchronize
     def _get_dir_entry(self, dirpath):
@@ -245,6 +290,51 @@ class RiakFS(MemoryFS):
             del dir_entry._mem_file
             dir_entry._mem_file = None
                 
+    # a lot of copy/pasting for the mutating methods
+
+    @synchronize
+    def remove(self, path):
+        dir_entry = self._get_dir_entry(path)
+
+        if dir_entry is None:
+            raise ResourceNotFoundError(path)
+
+        if dir_entry.isdir():
+            raise ResourceInvalidError(path,msg="That's a directory, not a file: %(path)s")
+
+        pathname, filename = pathsplit(path)
+        parent_dir = self._get_dir_entry(pathname)
+        parent_dir.remove(filename)
+        self.dirty = True
+        #del parent_dir.contents[filename]
+
+    @synchronize
+    def removedir(self, path, recursive=False, force=False):
+        path = normpath(path)
+        dir_entry = self._get_dir_entry(path)
+
+        if dir_entry is None:
+            raise ResourceNotFoundError(path)
+        if not dir_entry.isdir():
+            raise ResourceInvalidError(path, msg="Can't remove resource, its not a directory: %(path)s" )
+
+        if dir_entry.contents and not force:
+            raise DirectoryNotEmptyError(path)
+
+        if recursive:
+            rpathname = path
+            while rpathname:
+                rpathname, dirname = pathsplit(rpathname)
+                parent_dir = self._get_dir_entry(rpathname)
+                parent_dir.remove(dirname)
+                #del parent_dir.contents[dirname]
+        else:
+            pathname, dirname = pathsplit(path)
+            parent_dir = self._get_dir_entry(pathname)
+            parent_dir.remove(dirname)
+            #del parent_dir.contents[dirname]
+        self.dirty = True
+
     @synchronize
     def makedir(self, dirname, recursive=False, allow_recreate=False):
         if not dirname and not allow_recreate:
@@ -303,7 +393,42 @@ class RiakFS(MemoryFS):
         if dir_item is None:
             #parent_dir.contents[dirname] = self._make_dir_entry("dir", dirname)
             parent_dir._make_dir_entry("dir", dirname)
-        
+        self.dirty = True
+
+    @synchronize
+    def rename(self, src, dst):
+        src = normpath(src)
+        dst = normpath(dst)
+        src_dir, src_name = pathsplit(src)
+        src_entry = self._get_dir_entry(src)
+        if src_entry is None:
+            raise ResourceNotFoundError(src)
+        open_files = src_entry.open_files[:]
+        for f in open_files:
+            f.flush()
+            f.path = dst
+        if src_entry.isdir():
+            self.movedir(src, dst)
+            return
+
+        dst_dir,dst_name = pathsplit(dst)
+        dst_entry = self._get_dir_entry(dst)
+        if dst_entry is not None:
+            raise DestinationExistsError(dst)
+
+        src_dir_entry = self._get_dir_entry(src_dir)
+        src_xattrs = src_dir_entry.xattrs.copy()
+        dst_dir_entry = self._get_dir_entry(dst_dir)
+        if dst_dir_entry is None:
+            raise ParentDirectoryMissingError(dst)
+        dst_dir_entry._make_dir_entry(src_entry.type, dst_name, src_entry.contents)
+        #dst_dir_entry.contents[dst_name] = src_dir_entry.contents[src_name]
+        #dst_dir_entry.contents[dst_name].name = dst_name
+        #dst_dir_entry.xattrs.update(src_xattrs)
+        #del src_dir_entry.contents[src_name]
+        src_dir_entry.remove(src_name)
+        self.dirty = True
+
 
     @synchronize
     def open(self, path, mode="r", **kwargs):
@@ -332,6 +457,7 @@ class RiakFS(MemoryFS):
             if filename not in parent_dir_entry.contents:
                 file_dir_entry = parent_dir_entry._make_dir_entry("file", filename)
                 #parent_dir_entry.contents[filename] = file_dir_entry
+                self.dirty = True
             else:
                 file_dir_entry = parent_dir_entry.contents[filename]
 
