@@ -14,9 +14,7 @@ class TestRiakFS(unittest.TestCase,FSTestCases,ThreadingTestCases):
 
     def setUp(self):
         self.fs = RiakFS(self.bucket)
-        for key in self.fs.bucket.get_keys():
-            self.fs.bucket.get(key).delete()
-        self.fs.load()
+        self.fs.reset()
 
     def tearDown(self):
         self.fs.close()

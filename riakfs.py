@@ -32,21 +32,18 @@ def RiakBucket(name, host, port, transport):
 
 class DirtyFlag(object):
 
-    def __init__(self):
-        self.isdirty = False
-
     def __get__(self, instance, owner):
         if instance.autoupdate:
             return False
         else:
-            return self.isdirty
+            return instance._isdirty
 
     def __set__(self, instance, value):
         if instance.autoupdate:
             if value:
                 instance.save()
         else:
-            self.isdirty = value
+            instance._isdirty = value
 
 class RiakFSObject(DirEntry):
 
@@ -71,6 +68,8 @@ class RiakFSObject(DirEntry):
             d = {}
             for k,v in obj.__dict__.iteritems():
                 if k in ignore or k.startswith('_'):
+                    continue
+                if k == 'xattrs' and not v:
                     continue
                 d[k] = v
             if obj.contents:
@@ -118,8 +117,11 @@ class RiakFSObject(DirEntry):
         self.bucket = bucket
         self.type = type
         self.name = name.rstrip('/')
-        prefix = prefix or '/'
-        prefix = '/' + prefix.strip('/') + '/'
+        if prefix:
+            prefix = prefix.strip('/') + '/'
+        else:
+            prefix = ''
+        self.prefix = prefix
         self.path = prefix + name
         if type == 'dir':
             self.path += '/'
@@ -140,15 +142,15 @@ class RiakFSObject(DirEntry):
             self.lock = threading.RLock()
             
     def _make_dir_entry(self, type, name, contents=None):
-        if contents:
-            def update_paths(entries, prefix):
-                prefix = '/' + prefix.strip('/') + '/'
-                for entry in entries:
-                    entry.prefix = prefix
-                    entry.path = prefix + entry.name
-                    if entry.contents:
-                        update_paths(entry.contents.values(), entry.path)
-            update_paths(contents.values(), self.path)
+#        if contents:
+#            def update_paths(entries, prefix):
+#                prefix = '/' + prefix.strip('/') + '/'
+#                for entry in entries:
+#                    entry.prefix = prefix
+#                    entry.path = prefix + entry.name
+#                    if entry.contents:
+#                        update_paths(entry.contents.values(), entry.path)
+#            update_paths(contents.values(), self.path)
         child = self.__class__(
             self.bucket, type, name, prefix=self.path, contents=contents
         )
@@ -212,6 +214,9 @@ class RiakFS(MemoryFS):
               }
 
     def load(self):
+        """
+        Load the filesystem journal.
+        """
         obj = self.bucket.get(self.ROOTKEY)
         data = obj.get_data()
         if data:
@@ -220,13 +225,45 @@ class RiakFS(MemoryFS):
             self.root = RiakFSObject(self.bucket, 'dir', self.ROOTKEY)
 
     def save(self):
-        obj = self.bucket.new(self.ROOTKEY, self.root.to_dict())
-        obj.store()
+        """
+        Save the filesystem journal.
+        """
+        if self.root:
+            obj = self.bucket.new(self.ROOTKEY, self.root.to_dict())
+            obj.store()
+
+    def reset(self):
+        """
+        Delete all stored files and reset the journal.
+        """
+        rootprefix = self.ROOTKEY + '/'
+        for key in self.bucket.get_keys():
+            if key.startswith(rootprefix):
+                self.bucket.get(key).delete()
+        # delete the journal itself
+        self.bucket.get(self.ROOTKEY).delete()
+        if self.root:
+            del self.root
+        self.root = RiakFSObject(self.bucket, 'dir', self.ROOTKEY)
+
+    def rsync(self):
+        #TODO
+        # reconcile the in-memory fs with the remote bucket
+        # as alternative to autosaving
+        pass
+
+    def close(self):
+        self.save()
+
+    dirty = DirtyFlag()
 
     def __init__(
             self, bucket, host='127.0.0.1', port=8091,
             transport="HTTP", autoupdate=True
         ):
+        """
+        Create a RiakFS object. "bucket" can be a string or a ``RiakBucket`` instance.
+        """
         super(MemoryFS, self).__init__(thread_synchronize=_thread_synchronize_default)
         self.host = host
         self.port = port
@@ -235,7 +272,7 @@ class RiakFS(MemoryFS):
         self.file_factory = MemoryFile
         self.root = None
         self.autoupdate = autoupdate
-        self.dirty = DirtyFlag()
+        self._isdirty = False
 
     def _get_bucket(self):
         if isinstance(self._bucket, basestring):
@@ -261,9 +298,6 @@ class RiakFS(MemoryFS):
         except AttributeError:
             pass
         return state
-
-    def close(self):
-        self.save()
 
     @synchronize
     def _get_dir_entry(self, dirpath):
@@ -429,6 +463,19 @@ class RiakFS(MemoryFS):
         src_dir_entry.remove(src_name)
         self.dirty = True
 
+    @synchronize
+    def setcontents(self, path, data, chunk_size=1024*64):
+        memfile = self.open(path, 'w')
+        if hasattr(data, "read"):
+            read = data.read
+            write = memfile.write
+            chunk = read(chunk_size)
+            while chunk:
+                write(chunk)
+                chunk = read(chunk_size)
+        else:
+            memfile.write(data)
+        memfile.close()
 
     @synchronize
     def open(self, path, mode="r", **kwargs):
@@ -469,4 +516,15 @@ class RiakFS(MemoryFS):
 
         if parent_dir_entry is None:
             raise ResourceNotFoundError(path)
+
+    def printtree(self, max_levels=5, terminal_colors=None):
+        """Prints a tree structure of the FS object to the console
+        
+        :param max_levels: The maximum sub-directories to display, defaults to
+            5. Set to None for no limit 
+        
+        """
+        from fs.utils import print_fs
+        print_fs(self, max_levels=max_levels, terminal_colors=terminal_colors)
+    tree = printtree
 
