@@ -23,7 +23,7 @@ TRANSPORTS = {
 
 def RiakBucket(name, host, port, transport):
     """
-    Utility for creating a `riak.RiakBucket` instance from string parameters.
+    Utility for creating a `riak.RiakBucket` instance from string params.
     """
     client = riak.RiakClient(
         host=host, port=port, transport_class=TRANSPORTS[transport]
@@ -31,6 +31,9 @@ def RiakBucket(name, host, port, transport):
     return client.bucket(name)
 
 class DirtyFlag(object):
+    """
+    Descriptor for triggering an autosave of the filesystem.
+    """
 
     def __get__(self, instance, owner):
         if instance.autoupdate:
@@ -79,6 +82,8 @@ class RiakFSObject(DirEntry):
             return d
         return serialize(self)
 
+    # Datetime instances don't json serialize, so we maintain them as lists
+    # under the hood and "rehydrate" on demand
     def _get_ct(self):
         return datetime.fromtimestamp(time.mktime(self.timestamps['ctime']))
 
@@ -135,7 +140,6 @@ class RiakFSObject(DirEntry):
         
         self.xattrs = {}
         
-        #self.key = None
         self.lock = None
         self._mem_file = None
         if self.type == 'file':

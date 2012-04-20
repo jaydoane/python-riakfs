@@ -35,10 +35,13 @@ cluster installed, run the ``riak.devstart`` make target::
 
 This will download and install Riak and create and start a three node
 development cluster. The installation assumes that you have Erlang installed -
-the `Basho Wiki`_ has details (a source install on Ubuntu was
-straightforward).
+the `Basho Wiki`_ has details (a source install on Ubuntu was straightforward).
 
-Run the riakfs tests with::
+Check that the cluster is up with::
+
+    ps aux | grep beam
+
+And run the riakfs tests with::
 
     make test
 
@@ -57,7 +60,8 @@ Delete anything previously saved::
 
     >>> fs.reset()
 
-There's a delay here while Riak does its thing, wait 3 seconds to be safe::
+There's a delay here while Riak does its thing and, for the sake of not having
+a failed doctest, wait a few seconds::
 
     >>> import time
     >>> time.sleep(3)
