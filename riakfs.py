@@ -49,6 +49,17 @@ class DirtyFlag(object):
             instance._isdirty = value
 
 class RiakFSObject(DirEntry):
+    """
+    Represents a filesystem "node", either a directory of file.
+
+    A directory node may have sub-nodes in a contents dictionary.
+
+    Has more responsibility than the `DirEntry` class, for example the
+    `remove` and `_make_dir_entry` methods. Also has a `path` attribute
+    which, in the case of a file, is the key of the object in the Riak
+    store. TODO: look into moving the responsibilty back to the FS object,
+    make this class dumber.
+    """
 
     @classmethod
     def from_dict(cls, bucket, data):
@@ -144,8 +155,8 @@ class RiakFSObject(DirEntry):
         self._mem_file = None
         if self.type == 'file':
             self.lock = threading.RLock()
-            
-    def _make_dir_entry(self, type, name, contents=None):
+        # problem of having a `path` attribute - if there are contents, their
+        # paths may be different.
 #        if contents:
 #            def update_paths(entries, prefix):
 #                prefix = '/' + prefix.strip('/') + '/'
@@ -155,6 +166,8 @@ class RiakFSObject(DirEntry):
 #                    if entry.contents:
 #                        update_paths(entry.contents.values(), entry.path)
 #            update_paths(contents.values(), self.path)
+            
+    def _make_dir_entry(self, type, name, contents=None):
         child = self.__class__(
             self.bucket, type, name, prefix=self.path, contents=contents
         )
@@ -204,18 +217,19 @@ class RiakFS(MemoryFS):
 
     ROOTKEY = '__VFS__'
 
-    _meta = {'thread_safe' : True,            
-             'network' : True,
-             'virtual': False,
-             'read_only' : False,
-             'unicode_paths' : False,
-             'case_insensitive_paths' : False,
-             'atomic.move' : False,
-             'atomic.copy' : False,
-             'atomic.makedir' : False,
-             'atomic.rename' : False,
-             'atomic.setcontents' : False,              
-              }
+    _meta = {
+        'thread_safe' : True,            
+        'network' : True,
+        'virtual': False,
+        'read_only' : False,
+        'unicode_paths' : False,
+        'case_insensitive_paths' : False,
+        'atomic.move' : False,
+        'atomic.copy' : False,
+        'atomic.makedir' : False,
+        'atomic.rename' : False,
+        'atomic.setcontents' : False,              
+    }
 
     def load(self):
         """
@@ -241,10 +255,11 @@ class RiakFS(MemoryFS):
         Delete all stored files and reset the journal.
         """
         rootprefix = self.ROOTKEY + '/'
+        # delete files
         for key in self.bucket.get_keys():
             if key.startswith(rootprefix):
                 self.bucket.get(key).delete()
-        # delete the journal itself
+        # delete journal
         self.bucket.get(self.ROOTKEY).delete()
         if self.root:
             del self.root
@@ -272,10 +287,10 @@ class RiakFS(MemoryFS):
         self.host = host
         self.port = port
         self.transport = transport.upper()
-        self._bucket = bucket
         self.file_factory = MemoryFile
         self.root = None
         self.autoupdate = autoupdate
+        self._bucket = bucket
         self._isdirty = False
 
     def _get_bucket(self):
@@ -325,6 +340,7 @@ class RiakFS(MemoryFS):
                 entity = self.bucket.new_binary(dir_entry.path, data)
                 entity.store()
             dir_entry.open_files.remove(open_file)        
+            del open_file
             del dir_entry._mem_file
             dir_entry._mem_file = None
                 
